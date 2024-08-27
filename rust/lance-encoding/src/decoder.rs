@@ -222,7 +222,7 @@ use arrow_schema::{DataType, Field as ArrowField, Fields, Schema as ArrowSchema}
 use bytes::Bytes;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
-use futures::{FutureExt, StreamExt};
+use futures::{FutureExt, StreamExt, TryFutureExt};
 use lance_arrow::DataTypeExt;
 use lance_core::datatypes::{Field, Schema};
 use log::{debug, trace, warn};
@@ -1264,7 +1264,15 @@ impl BatchDecodeStream {
                 (task, num_rows)
             });
             next_task.map(|(task, num_rows)| {
-                let task = task.map(|join_wrapper| join_wrapper.unwrap()).boxed();
+                let task = task
+                    .map_err(|_| {
+                        std::io::Error::new(
+                            std::io::ErrorKind::Other,
+                            "Could not create array with more than 2GiB of string/binary data. Please try reducing the batch_size.",
+                        )
+                    })
+                    .and_then(|join_result| async_compat::Compat::new(join_result.map_err(|e| e.into())))
+                    .boxed();
                 // This should be true since batch size is u32
                 debug_assert!(num_rows <= u32::MAX as u64);
                 let next_task = ReadBatchTask {
